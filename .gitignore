@@ -79,3 +79,6 @@ dmypy.json
 
 # Ruff
 .ruff_cache/
+
+# kamui
+.kamui/
