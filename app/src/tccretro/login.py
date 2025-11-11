@@ -1,6 +1,7 @@
 """TaskChute Cloud ログインチェッカー (永続的プロファイル用)."""
 
 import os
+import time
 
 from playwright.sync_api import Page
 
@@ -19,7 +20,9 @@ class TaskChuteLogin:
         self.google_password = google_password
         self.base_url = "https://taskchute.cloud"
 
-    def login(self, page: Page) -> bool:
+    def login(
+        self, page: Page, wait_for_manual_login: bool = False, manual_timeout_sec: int | None = None
+    ) -> bool:
         """TaskChute Cloudへのログイン状態をチェックします。
 
         永続的Chromeプロファイルを使用する場合:
@@ -28,6 +31,8 @@ class TaskChuteLogin:
 
         Args:
             page: Playwright Pageオブジェクト
+            wait_for_manual_login: Trueの場合、未ログイン時に手動ログインを待機
+            manual_timeout_sec: 手動ログイン待機時間（秒）。Noneの場合は300秒（5分）
 
         Returns:
             ログインに成功した場合True、失敗した場合False
@@ -44,11 +49,46 @@ class TaskChuteLogin:
                 return True
             else:
                 print("\n✗ ログインが必要です")
-                print("初回実行時は --login-only --debug オプションを使用して")
-                print("ブラウザでTaskChute Cloudにログインしてください。")
-                print("（Googleログイン、Appleログイン、E-mailログインのいずれでもOK）")
-                print("\n次回以降は自動的にログイン済みの状態で起動します。")
-                return False
+
+                if wait_for_manual_login:
+                    # ヘッドレスモードかどうかを確認
+                    # PlaywrightのPageオブジェクトから直接確認できないため、
+                    # 警告メッセージを表示（実際のヘッドレス判定はCLI側で行う）
+                    print("\nブラウザで手動でログインしてください:")
+                    print("1. ブラウザでログインボタンをクリック")
+                    print("2. Googleログイン、Appleログイン、E-mailログインのいずれかでログイン")
+                    print("3. ログイン完了後、自動的に検出されます")
+                    print(f"\n現在のURL: {page.url}")
+                    print(f"ページタイトル: {page.title()}")
+                    print("\nログイン完了を待機中...")
+
+                    # 手動ログイン待機
+                    timeout = manual_timeout_sec if manual_timeout_sec is not None else 300
+                    start_time = time.time()
+
+                    while time.time() - start_time < timeout:
+                        # 2秒ごとにログイン状態をチェック
+                        page.wait_for_timeout(2000)
+
+                        # ログイン状態を再確認
+                        if self._is_logged_in(page):
+                            print("\n✓ ログイン完了を検出しました！")
+                            return True
+
+                        # 進捗表示（30秒ごと）
+                        elapsed = int(time.time() - start_time)
+                        if elapsed > 0 and elapsed % 30 == 0:
+                            remaining = timeout - elapsed
+                            print(f"待機中... (残り約{remaining}秒)")
+
+                    print(f"\nタイムアウト: {timeout}秒以内にログインが検出されませんでした")
+                    return False
+                else:
+                    print("初回実行時は --login-only --debug オプションを使用して")
+                    print("ブラウザでTaskChute Cloudにログインしてください。")
+                    print("（Googleログイン、Appleログイン、E-mailログインのいずれでもOK）")
+                    print("\n次回以降は自動的にログイン済みの状態で起動します。")
+                    return False
 
         except Exception as e:
             print(f"エラー: {e}")

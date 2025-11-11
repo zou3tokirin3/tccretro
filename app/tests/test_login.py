@@ -47,6 +47,92 @@ class TestTaskChuteLogin:
 
         assert result is False
 
+    def test_login_wait_for_manual_login_timeout(self, mock_page: Mock, monkeypatch):
+        """login: wait_for_manual_login=Trueでタイムアウトする場合、Falseを返す."""
+        import time
+
+        login = TaskChuteLogin("test@example.com", "test_password")
+
+        # ログインページのURLをモック（未ログイン状態）
+        mock_page.url = "https://taskchute.cloud/auth/login"
+        mock_page.title.return_value = "TaskChute Cloud - Login"
+        # ログインボタンが見つかる場合（未ログイン）
+        mock_page.wait_for_selector.return_value = True
+
+        # 時間をモックしてタイムアウトをシミュレート
+        start_time = 1000.0
+        call_count = 0
+
+        def mock_time():
+            nonlocal call_count
+            call_count += 1
+            # 最初の呼び出しでstart_timeを返し、その後2秒ごとに時間を進める
+            if call_count == 1:
+                return start_time
+            # 2回目以降は2秒ずつ進む（call_count-1で調整）
+            return start_time + ((call_count - 1) * 2)
+
+        monkeypatch.setattr(time, "time", mock_time)
+
+        # 短いタイムアウトでテスト（3秒、ループが実行されるように）
+        result = login.login(mock_page, wait_for_manual_login=True, manual_timeout_sec=3)
+
+        assert result is False
+        # wait_for_timeoutが呼ばれていることを確認（少なくとも1回は呼ばれる）
+        assert mock_page.wait_for_timeout.call_count > 0
+
+    def test_login_wait_for_manual_login_success(self, mock_page: Mock, monkeypatch):
+        """login: wait_for_manual_login=Trueでログイン成功する場合、Trueを返す."""
+        import time
+
+        login = TaskChuteLogin("test@example.com", "test_password")
+
+        # 最初は未ログイン、その後ログイン済みになる
+        call_count = 0
+
+        def mock_is_logged_in(page):
+            nonlocal call_count
+            call_count += 1
+            # 2回目の呼び出しでログイン済みになる
+            if call_count == 1:
+                return False
+            return True
+
+        monkeypatch.setattr(login, "_is_logged_in", mock_is_logged_in)
+
+        # ログインページのURLをモック
+        mock_page.url = "https://taskchute.cloud/auth/login"
+        mock_page.title.return_value = "TaskChute Cloud - Login"
+
+        # 時間をモック
+        start_time = 1000.0
+        time_call_count = 0
+
+        def mock_time():
+            nonlocal time_call_count
+            time_call_count += 1
+            return start_time + (time_call_count * 2)
+
+        monkeypatch.setattr(time, "time", mock_time)
+
+        result = login.login(mock_page, wait_for_manual_login=True, manual_timeout_sec=300)
+
+        assert result is True
+        # wait_for_timeoutが呼ばれていることを確認
+        assert mock_page.wait_for_timeout.call_count > 0
+
+    def test_login_backward_compatibility(self, mock_page: Mock):
+        """login: 既存の呼び出し方法（引数なし）が後方互換性を保つことを確認."""
+        login = TaskChuteLogin("test@example.com", "test_password")
+
+        # ログイン済みURLをモック
+        mock_page.url = "https://taskchute.cloud/taskchute"
+
+        # 引数なしで呼び出し（既存のコード）
+        result = login.login(mock_page)
+
+        assert result is True
+
     def test_login_exception_handling(self, mock_page: Mock, capsys):
         """login: 例外が発生した場合、Falseを返しエラーメッセージを表示."""
         login = TaskChuteLogin("test@example.com", "test_password")

@@ -71,6 +71,8 @@ class TestCLI:
 
         assert result.exit_code == 0
         assert "TaskChute Cloud エクスポート自動化ツール" in result.output
+        # --login-timeoutオプションがヘルプに表示されることを確認
+        assert "--login-timeout" in result.output
 
     def test_default_export_date_is_yesterday(self, runner: CliRunner):
         """デフォルトのエクスポート日付が昨日であることを確認."""
@@ -140,8 +142,58 @@ class TestCLI:
 
             assert result.exit_code == 0
             assert "ログインテスト完了" in result.output
+            # wait_for_manual_login=Trueで呼ばれることを確認
+            mocks["login"].login.assert_called_once_with(
+                mocks["page"], wait_for_manual_login=True, manual_timeout_sec=300
+            )
             # export_dataが呼ばれないことを確認
             mocks["exporter"].export_data.assert_not_called()
+
+    def test_login_only_with_timeout_option(self, runner: CliRunner):
+        """--login-only --login-timeoutオプションが正しく動作することを確認."""
+        with self._mock_cli_dependencies(runner) as mocks:
+            mocks["login"].login.return_value = True
+
+            result = runner.invoke(main, ["--login-only", "--login-timeout", "600"])
+
+            assert result.exit_code == 0
+            # manual_timeout_sec=600で呼ばれることを確認
+            mocks["login"].login.assert_called_once_with(
+                mocks["page"], wait_for_manual_login=True, manual_timeout_sec=600
+            )
+
+    def test_login_only_headless_warning(self, runner: CliRunner):
+        """--login-onlyをheadlessモードで実行した場合、警告が表示されることを確認."""
+        with self._mock_cli_dependencies(runner) as mocks:
+            mocks["login"].login.return_value = False
+
+            result = runner.invoke(main, ["--login-only"])
+
+            assert result.exit_code == 1
+            assert "警告" in result.output or "[警告]" in result.output
+            assert "headless" in result.output.lower() or "headless" in result.output
+            assert "--debug" in result.output
+
+    def test_login_only_with_debug_no_warning(self, runner: CliRunner):
+        """--login-only --debugの場合、警告が表示されないことを確認."""
+        with self._mock_cli_dependencies(runner) as mocks:
+            mocks["login"].login.return_value = True
+
+            result = runner.invoke(main, ["--login-only", "--debug"])
+
+            assert result.exit_code == 0
+            # 警告メッセージが含まれないことを確認
+            assert "警告" not in result.output and "[警告]" not in result.output
+
+    def test_login_only_failure_exits_with_code_1(self, runner: CliRunner):
+        """--login-onlyでログイン失敗時、終了コード1で終了することを確認."""
+        with self._mock_cli_dependencies(runner) as mocks:
+            mocks["login"].login.return_value = False
+
+            result = runner.invoke(main, ["--login-only"])
+
+            assert result.exit_code == 1
+            assert "ログインが検出されませんでした" in result.output
 
     def test_login_only_and_export_only_conflict(self, runner: CliRunner):
         """--login-onlyと--export-onlyが同時に指定された場合、エラーを返す."""

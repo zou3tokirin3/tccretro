@@ -77,6 +77,12 @@ from tccretro.login import create_login_from_env
     default="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     help="BedrockのモデルIDまたは推論プロファイルID",
 )
+@click.option(
+    "--login-timeout",
+    type=int,
+    default=300,
+    help="手動ログイン待機時間（秒、--login-only 使用時のみ有効、デフォルト: 300）",
+)
 def main(
     login_only: bool,
     export_only: bool,
@@ -90,6 +96,7 @@ def main(
     analyze: bool,
     no_ai: bool,
     model_id: str,
+    login_timeout: int,
 ):
     """TaskChute Cloud エクスポート自動化ツール (ローカル実行)."""
     # Load environment variables
@@ -174,18 +181,46 @@ def main(
                 # Step 1: Login
                 if not export_only:
                     click.echo(f"\n[1/{total_steps}] TaskChute Cloudにログイン中...")
-                    login_success = login_handler.login(page)
-
-                    if not login_success:
-                        click.echo("✗ ログイン失敗", err=True)
-                        sys.exit(1)
-
-                    click.echo("✓ ログイン成功")
-                    click.echo("(認証情報は chrome-profile/ に自動保存されます)")
 
                     if login_only:
-                        click.echo("\n=== ログインテスト完了 ===")
-                        return
+                        # --login-only の場合は、未ログインでも待機する
+                        if not debug:
+                            click.echo(
+                                "[警告] --login-only を headless モードで実行中。",
+                                err=True,
+                            )
+                            click.echo(
+                                "手動ログイン操作はできません。--debug オプションを付けて再実行することを推奨します。",
+                                err=True,
+                            )
+
+                        login_success = login_handler.login(
+                            page, wait_for_manual_login=True, manual_timeout_sec=login_timeout
+                        )
+
+                        if login_success:
+                            click.echo("✓ ログイン成功")
+                            click.echo("(認証情報は chrome-profile/ に自動保存されます)")
+                            click.echo("\n=== ログインテスト完了 ===")
+                            sys.exit(0)
+                        else:
+                            click.echo("\n⚠ ログインが検出されませんでした", err=True)
+                            if not debug:
+                                click.echo(
+                                    "--debug オプションを付けて再実行することを推奨します。",
+                                    err=True,
+                                )
+                            sys.exit(1)
+                    else:
+                        # 通常の実行時は、ログイン失敗で終了
+                        login_success = login_handler.login(page)
+
+                        if not login_success:
+                            click.echo("✗ ログイン失敗", err=True)
+                            sys.exit(1)
+
+                        click.echo("✓ ログイン成功")
+                        click.echo("(認証情報は chrome-profile/ に自動保存されます)")
 
                 # Step 2: Export
                 exported_file = None
