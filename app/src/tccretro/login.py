@@ -43,47 +43,51 @@ class TaskChuteLogin:
             page.goto(f"{self.base_url}/taskchute")
             page.wait_for_load_state("domcontentloaded")
 
-            # ログイン状態を確認
-            if self._is_logged_in(page):
-                print("✓ ログイン済みです")
-                return True
+            # wait_for_manual_login=Trueの場合、最初のチェックをスキップして
+            # 直接手動ログイン待機ループに入る（ユーザーが手動でログインするため）
+            if wait_for_manual_login:
+                # ページのリダイレクトが完了するまで少し待機
+                page.wait_for_timeout(2000)
+
+                print("\nブラウザで手動でログインしてください:")
+                print("1. ブラウザでログインボタンをクリック")
+                print("2. Googleログイン、Appleログイン、E-mailログインのいずれかでログイン")
+                print("3. ログイン完了後、自動的に検出されます")
+                print(f"\n現在のURL: {page.url}")
+                print(f"ページタイトル: {page.title()}")
+                print("\nログイン完了を待機中...")
+
+                # 手動ログイン待機
+                timeout = manual_timeout_sec if manual_timeout_sec is not None else 300
+                start_time = time.time()
+
+                while time.time() - start_time < timeout:
+                    # 2秒ごとにログイン状態をチェック
+                    page.wait_for_timeout(2000)
+
+                    # ログイン状態を再確認
+                    if self._is_logged_in(page):
+                        print("\n✓ ログイン完了を検出しました！")
+                        return True
+
+                    # 進捗表示（30秒ごと）
+                    elapsed = int(time.time() - start_time)
+                    if elapsed > 0 and elapsed % 30 == 0:
+                        remaining = timeout - elapsed
+                        print(f"待機中... (残り約{remaining}秒)")
+                        # 観測性向上のため、URLとタイトルも表示
+                        print(f"  現在のURL: {page.url}")
+                        print(f"  ページタイトル: {page.title()}")
+
+                print(f"\nタイムアウト: {timeout}秒以内にログインが検出されませんでした")
+                return False
             else:
-                print("\n✗ ログインが必要です")
-
-                if wait_for_manual_login:
-                    # ヘッドレスモードかどうかを確認
-                    # PlaywrightのPageオブジェクトから直接確認できないため、
-                    # 警告メッセージを表示（実際のヘッドレス判定はCLI側で行う）
-                    print("\nブラウザで手動でログインしてください:")
-                    print("1. ブラウザでログインボタンをクリック")
-                    print("2. Googleログイン、Appleログイン、E-mailログインのいずれかでログイン")
-                    print("3. ログイン完了後、自動的に検出されます")
-                    print(f"\n現在のURL: {page.url}")
-                    print(f"ページタイトル: {page.title()}")
-                    print("\nログイン完了を待機中...")
-
-                    # 手動ログイン待機
-                    timeout = manual_timeout_sec if manual_timeout_sec is not None else 300
-                    start_time = time.time()
-
-                    while time.time() - start_time < timeout:
-                        # 2秒ごとにログイン状態をチェック
-                        page.wait_for_timeout(2000)
-
-                        # ログイン状態を再確認
-                        if self._is_logged_in(page):
-                            print("\n✓ ログイン完了を検出しました！")
-                            return True
-
-                        # 進捗表示（30秒ごと）
-                        elapsed = int(time.time() - start_time)
-                        if elapsed > 0 and elapsed % 30 == 0:
-                            remaining = timeout - elapsed
-                            print(f"待機中... (残り約{remaining}秒)")
-
-                    print(f"\nタイムアウト: {timeout}秒以内にログインが検出されませんでした")
-                    return False
+                # 通常モード: ログイン状態を確認
+                if self._is_logged_in(page):
+                    print("✓ ログイン済みです")
+                    return True
                 else:
+                    print("\n✗ ログインが必要です")
                     print("初回実行時は --login-only --debug オプションを使用して")
                     print("ブラウザでTaskChute Cloudにログインしてください。")
                     print("（Googleログイン、Appleログイン、E-mailログインのいずれでもOK）")
@@ -108,18 +112,24 @@ class TaskChuteLogin:
         """
         current_url = page.url
 
+        # /auth/ パスが含まれている場合、未ログイン
+        if "/auth/" in current_url:
+            return False
+
+        # ログインボタンが表示されている場合、未ログイン
+        try:
+            page.wait_for_selector('button:has-text("LOGIN WITH")', timeout=2000)
+            return False  # ログインボタンが見つかった、未ログイン
+        except Exception:
+            # ログインボタンが見つからない場合、さらに確認
+            pass
+
         # /taskchute にいて /auth/ にいない場合、ログイン済み
         if "/taskchute" in current_url and "/auth/" not in current_url:
             return True
 
-        # ログインフォームが表示されているかもチェック (未ログインを示す)
-        try:
-            # ログインページが表示されるか短時間待機
-            page.wait_for_selector('button:has-text("LOGIN WITH")', timeout=2000)
-            return False  # ログインボタンが見つかった、未ログイン
-        except Exception:
-            # ログインボタンが見つからない、おそらくログイン済み
-            return True
+        # その他の場合は未ログインと判定（保守的）
+        return False
 
 
 def create_login_from_env() -> TaskChuteLogin:

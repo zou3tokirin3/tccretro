@@ -169,7 +169,7 @@ class TestTaskChuteLogin:
         mock_page.wait_for_selector.assert_called_once()
 
     def test_is_logged_in_no_login_button(self, mock_page: Mock):
-        """_is_logged_in: ログインボタンが見つからない場合、ログイン済みと判定."""
+        """_is_logged_in: ログインボタンが見つからない場合でも、/taskchuteでなければ未ログインと判定（保守的）."""
         login = TaskChuteLogin("test@example.com", "test_password")
         mock_page.url = "https://taskchute.cloud/some-page"
 
@@ -178,7 +178,67 @@ class TestTaskChuteLogin:
 
         result = login._is_logged_in(mock_page)
 
+        # 保守的な判定: /taskchuteでない場合はFalseを返す
+        assert result is False
+
+    def test_is_logged_in_no_login_button_but_taskchute_url(self, mock_page: Mock):
+        """_is_logged_in: ログインボタンが見つからないが/taskchute URLの場合、ログイン済みと判定."""
+        login = TaskChuteLogin("test@example.com", "test_password")
+        mock_page.url = "https://taskchute.cloud/taskchute"
+
+        # ログインボタンが見つからない（タイムアウト）
+        mock_page.wait_for_selector.side_effect = Exception("Timeout")
+
+        result = login._is_logged_in(mock_page)
+
+        # /taskchute URLでログインボタンがない場合、ログイン済みと判定
         assert result is True
+
+    def test_login_wait_for_manual_login_skips_initial_check(self, mock_page: Mock, monkeypatch):
+        """login: wait_for_manual_login=Trueの場合、初回_is_logged_in()チェックをスキップして待機に入る."""
+        import time
+
+        login = TaskChuteLogin("test@example.com", "test_password")
+
+        # _is_logged_in()が呼ばれた回数を追跡
+        is_logged_in_call_count = 0
+
+        def mock_is_logged_in(page):
+            nonlocal is_logged_in_call_count
+            is_logged_in_call_count += 1
+            # 待機ループ内での呼び出しではFalseを返す（ログイン待ち）
+            return False
+
+        monkeypatch.setattr(login, "_is_logged_in", mock_is_logged_in)
+
+        # ログインページのURLをモック
+        mock_page.url = "https://taskchute.cloud/taskchute"
+        mock_page.title.return_value = "TaskChute Cloud"
+
+        # 時間をモックして短いタイムアウトでテスト
+        start_time = 1000.0
+        time_call_count = 0
+
+        def mock_time():
+            nonlocal time_call_count
+            time_call_count += 1
+            # 最初の呼び出しでstart_timeを返し、その後2秒ごとに時間を進める
+            if time_call_count == 1:
+                return start_time
+            return start_time + ((time_call_count - 1) * 2)
+
+        monkeypatch.setattr(time, "time", mock_time)
+
+        # 短いタイムアウトでテスト（3秒、ループが実行されるように）
+        result = login.login(mock_page, wait_for_manual_login=True, manual_timeout_sec=3)
+
+        # タイムアウトでFalseを返す
+        assert result is False
+        # 初回チェックをスキップしているため、_is_logged_in()は待機ループ内でのみ呼ばれる
+        # 待機ループは2秒ごとに実行されるため、3秒のタイムアウトでは少なくとも1回は呼ばれる
+        assert is_logged_in_call_count > 0
+        # wait_for_timeoutが呼ばれていることを確認
+        assert mock_page.wait_for_timeout.call_count > 0
 
 
 class TestCreateLoginFromEnv:
