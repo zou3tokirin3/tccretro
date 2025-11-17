@@ -279,3 +279,190 @@ class TestTaskChuteExporter:
         assert result is False
         # 4つのセレクタすべてが試行される
         assert mock_page.wait_for_selector.call_count == 4
+
+    def test_get_expected_filename(self, temp_download_dir: Path):
+        """_get_expected_filename: 期待されるファイル名が正しく生成される."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        target_date = date(2025, 11, 15)
+
+        result = exporter._get_expected_filename(target_date)
+
+        assert result == temp_download_dir / "tasks_20251115-20251115.csv"
+
+    def test_check_existing_files_all_exist(self, temp_download_dir: Path):
+        """_check_existing_files: 全てのファイルが存在する場合."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        start_date = date(2025, 11, 10)
+        end_date = date(2025, 11, 12)
+
+        # ファイルを作成
+        (temp_download_dir / "tasks_20251110-20251110.csv").touch()
+        (temp_download_dir / "tasks_20251111-20251111.csv").touch()
+        (temp_download_dir / "tasks_20251112-20251112.csv").touch()
+
+        existing_dates, missing_dates = exporter._check_existing_files(start_date, end_date)
+
+        assert len(existing_dates) == 3
+        assert len(missing_dates) == 0
+        assert existing_dates == [date(2025, 11, 10), date(2025, 11, 11), date(2025, 11, 12)]
+
+    def test_check_existing_files_some_missing(self, temp_download_dir: Path):
+        """_check_existing_files: 一部のファイルが欠けている場合."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        start_date = date(2025, 11, 10)
+        end_date = date(2025, 11, 12)
+
+        # 一部のファイルのみ作成
+        (temp_download_dir / "tasks_20251110-20251110.csv").touch()
+        # 2025-11-11は欠けている
+        (temp_download_dir / "tasks_20251112-20251112.csv").touch()
+
+        existing_dates, missing_dates = exporter._check_existing_files(start_date, end_date)
+
+        assert len(existing_dates) == 2
+        assert len(missing_dates) == 1
+        assert existing_dates == [date(2025, 11, 10), date(2025, 11, 12)]
+        assert missing_dates == [date(2025, 11, 11)]
+
+    def test_check_existing_files_all_missing(self, temp_download_dir: Path):
+        """_check_existing_files: 全てのファイルが欠けている場合."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        start_date = date(2025, 11, 10)
+        end_date = date(2025, 11, 12)
+
+        existing_dates, missing_dates = exporter._check_existing_files(start_date, end_date)
+
+        assert len(existing_dates) == 0
+        assert len(missing_dates) == 3
+        assert missing_dates == [date(2025, 11, 10), date(2025, 11, 11), date(2025, 11, 12)]
+
+    def test_group_consecutive_dates_single_range(self, temp_download_dir: Path):
+        """_group_consecutive_dates: 連続する日付が1つの範囲にグループ化される."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        dates = [date(2025, 11, 10), date(2025, 11, 11), date(2025, 11, 12)]
+
+        result = exporter._group_consecutive_dates(dates)
+
+        assert len(result) == 1
+        assert result[0] == (date(2025, 11, 10), date(2025, 11, 12))
+
+    def test_group_consecutive_dates_multiple_ranges(self, temp_download_dir: Path):
+        """_group_consecutive_dates: 連続しない日付が複数の範囲にグループ化される."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        dates = [date(2025, 11, 10), date(2025, 11, 11), date(2025, 11, 13), date(2025, 11, 14)]
+
+        result = exporter._group_consecutive_dates(dates)
+
+        assert len(result) == 2
+        assert result[0] == (date(2025, 11, 10), date(2025, 11, 11))
+        assert result[1] == (date(2025, 11, 13), date(2025, 11, 14))
+
+    def test_group_consecutive_dates_single_date(self, temp_download_dir: Path):
+        """_group_consecutive_dates: 単一の日付が1つの範囲にグループ化される."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        dates = [date(2025, 11, 10)]
+
+        result = exporter._group_consecutive_dates(dates)
+
+        assert len(result) == 1
+        assert result[0] == (date(2025, 11, 10), date(2025, 11, 10))
+
+    def test_group_consecutive_dates_empty(self, temp_download_dir: Path):
+        """_group_consecutive_dates: 空のリストが空の範囲リストを返す."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        dates = []
+
+        result = exporter._group_consecutive_dates(dates)
+
+        assert len(result) == 0
+
+    def test_export_data_all_files_exist_skip(
+        self, mock_page: Mock, temp_download_dir: Path, capsys
+    ):
+        """export_data: 全てのファイルが存在する場合、エクスポートをスキップ."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        start_date = date(2025, 11, 10)
+        end_date = date(2025, 11, 10)
+
+        # ファイルを作成
+        existing_file = temp_download_dir / "tasks_20251110-20251110.csv"
+        existing_file.touch()
+
+        result = exporter.export_data(mock_page, start_date, end_date)
+
+        assert result == str(existing_file)
+        # エクスポート処理が呼ばれていないことを確認
+        mock_page.goto.assert_not_called()
+        captured = capsys.readouterr()
+        assert "全ての日付のファイルが既に存在します" in captured.out
+        assert "スキップします" in captured.out
+
+    def test_export_data_some_files_missing_partial_export(
+        self, mock_page: Mock, mock_locator: Mock, mock_download: Mock, temp_download_dir: Path, capsys
+    ):
+        """export_data: 一部のファイルが欠けている場合、欠けている日付のみエクスポート."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        start_date = date(2025, 11, 10)
+        end_date = date(2025, 11, 12)
+
+        # 一部のファイルのみ作成
+        (temp_download_dir / "tasks_20251110-20251110.csv").touch()
+        # 2025-11-11は欠けている
+        (temp_download_dir / "tasks_20251112-20251112.csv").touch()
+
+        # fill_date_rangeとエクスポート処理をモック化
+        with patch.object(exporter, "_export_date_range", return_value=str(temp_download_dir / "tasks_20251111-20251111.csv")):
+            result = exporter.export_data(mock_page, start_date, end_date)
+
+            assert result is not None
+            assert "tasks_20251111-20251111.csv" in result
+            # 欠けている日付のみエクスポートされることを確認
+            exporter._export_date_range.assert_called_once_with(mock_page, date(2025, 11, 11), date(2025, 11, 11))
+            captured = capsys.readouterr()
+            assert "既存ファイルが見つかりました" in captured.out
+            assert "欠けている日付のみをエクスポートします" in captured.out
+
+    def test_export_data_all_files_missing_normal_export(
+        self, mock_page: Mock, mock_locator: Mock, mock_download: Mock, temp_download_dir: Path
+    ):
+        """export_data: 全てのファイルが欠けている場合、通常通りエクスポート."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        start_date = date(2025, 11, 10)
+        end_date = date(2025, 11, 10)
+
+        # fill_date_rangeとエクスポート処理をモック化
+        with patch.object(exporter, "_export_date_range", return_value=str(temp_download_dir / "tasks_20251110-20251110.csv")):
+            result = exporter.export_data(mock_page, start_date, end_date)
+
+            assert result is not None
+            # 通常通りエクスポートされることを確認
+            exporter._export_date_range.assert_called_once_with(mock_page, start_date, end_date)
+
+    def test_export_data_multiple_missing_ranges(
+        self, mock_page: Mock, temp_download_dir: Path
+    ):
+        """export_data: 複数の連続しない範囲が欠けている場合、各範囲を個別にエクスポート."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        start_date = date(2025, 11, 10)
+        end_date = date(2025, 11, 14)
+
+        # 一部のファイルのみ作成（2025-11-10, 2025-11-12, 2025-11-14は存在）
+        (temp_download_dir / "tasks_20251110-20251110.csv").touch()
+        (temp_download_dir / "tasks_20251112-20251112.csv").touch()
+        (temp_download_dir / "tasks_20251114-20251114.csv").touch()
+        # 2025-11-11と2025-11-13が欠けている
+
+        # fill_date_rangeとエクスポート処理をモック化
+        with patch.object(exporter, "_export_date_range") as mock_export:
+            mock_export.side_effect = [
+                str(temp_download_dir / "tasks_20251111-20251111.csv"),
+                str(temp_download_dir / "tasks_20251113-20251113.csv"),
+            ]
+
+            result = exporter.export_data(mock_page, start_date, end_date)
+
+            assert result is not None
+            # 2つの範囲が個別にエクスポートされることを確認
+            assert mock_export.call_count == 2
+            mock_export.assert_any_call(mock_page, date(2025, 11, 11), date(2025, 11, 11))
+            mock_export.assert_any_call(mock_page, date(2025, 11, 13), date(2025, 11, 13))

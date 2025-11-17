@@ -1,6 +1,6 @@
 """Playwrightを使用したTaskChute Cloudエクスポート自動化."""
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from playwright.sync_api import Download, Page
@@ -116,12 +116,166 @@ class TaskChuteExporter:
             traceback.print_exc()
             return False
 
+    def _get_expected_filename(self, target_date: date) -> Path:
+        """指定された日付に対応する期待されるファイル名を生成します。
+
+        Args:
+            target_date: 対象日付
+
+        Returns:
+            期待されるファイルパス
+        """
+        date_str = target_date.strftime("%Y%m%d")
+        filename = f"tasks_{date_str}-{date_str}.csv"
+        return self.download_dir / filename
+
+    def _check_existing_files(
+        self, start_date: date, end_date: date
+    ) -> tuple[list[date], list[date]]:
+        """日付範囲内の既存ファイルをチェックします。
+
+        Args:
+            start_date: 開始日
+            end_date: 終了日
+
+        Returns:
+            (存在する日付のリスト, 欠けている日付のリスト)のタプル
+        """
+        existing_dates = []
+        missing_dates = []
+
+        current_date = start_date
+        while current_date <= end_date:
+            expected_file = self._get_expected_filename(current_date)
+            if expected_file.exists():
+                existing_dates.append(current_date)
+            else:
+                missing_dates.append(current_date)
+            current_date += timedelta(days=1)
+
+        return existing_dates, missing_dates
+
+    def _group_consecutive_dates(self, dates: list[date]) -> list[tuple[date, date]]:
+        """日付リストを連続する範囲にグループ化します。
+
+        Args:
+            dates: 日付のリスト（ソート済みである必要があります）
+
+        Returns:
+            連続する日付範囲のリスト [(start_date, end_date), ...]
+        """
+        if not dates:
+            return []
+
+        dates_sorted = sorted(dates)
+        ranges = []
+        range_start = dates_sorted[0]
+        range_end = dates_sorted[0]
+
+        for i in range(1, len(dates_sorted)):
+            if dates_sorted[i] == range_end + timedelta(days=1):
+                # 連続している
+                range_end = dates_sorted[i]
+            else:
+                # 連続が途切れた
+                ranges.append((range_start, range_end))
+                range_start = dates_sorted[i]
+                range_end = dates_sorted[i]
+
+        # 最後の範囲を追加
+        ranges.append((range_start, range_end))
+
+        return ranges
+
+    def _export_date_range(
+        self, page: Page, start_date: date, end_date: date
+    ) -> str | None:
+        """指定された日付範囲のデータをエクスポートします（内部実装）。
+
+        Args:
+            page: Playwright Pageオブジェクト
+            start_date: エクスポートの開始日
+            end_date: エクスポートの終了日
+
+        Returns:
+            ダウンロードしたファイルのパス、またはエクスポート失敗時はNone
+        """
+        # エクスポートページへ移動
+        export_url = "https://taskchute.cloud/export/csv-export"
+        print(f"{export_url} へ移動中")
+        page.goto(export_url, timeout=30000)
+
+        # ページが安定した状態になるまで待機
+        print("ページの読み込みを待機中...")
+        page.wait_for_load_state("load", timeout=30000)
+
+        # 日付入力フィールドが表示されるまで待機 (Reactアプリのレンダリング完了を確認)
+        print("日付入力フィールドの表示を待機中...")
+        try:
+            page.wait_for_selector('input[placeholder*="YYYY"]', timeout=10000, state="visible")
+        except Exception:
+            # フォールバック: 個別フィールドを待機
+            page.wait_for_selector('[aria-label="年"]', timeout=10000, state="visible")
+
+        # ページ読み込み後のスクリーンショットを撮影 (デバッグモードのみ)
+        if self.debug:
+            screenshot_path = self.download_dir / "debug_page_loaded.png"
+            page.screenshot(path=str(screenshot_path))
+            print(f"スクリーンショット保存: {screenshot_path}")
+
+        # 日付範囲を入力
+        if not self.fill_date_range(page, start_date, end_date):
+            print("日付範囲の入力に失敗しました")
+            if self.debug:
+                screenshot_path = self.download_dir / "debug_fill_date_failed.png"
+                page.screenshot(path=str(screenshot_path))
+                print(f"エラースクリーンショット保存: {screenshot_path}")
+            return None
+
+        # 日付入力後のスクリーンショットを撮影 (デバッグモードのみ)
+        if self.debug:
+            screenshot_path = self.download_dir / "debug_dates_filled.png"
+            page.screenshot(path=str(screenshot_path))
+            print(f"スクリーンショット保存: {screenshot_path}")
+
+        # ダウンロードボタンを検索
+        download_button = page.locator('button:has-text("ダウンロード")')
+        button_count = download_button.count()
+        print(f"ダウンロードボタンを {button_count} 個発見")
+
+        if button_count == 0:
+            print("ダウンロードボタンが見つかりませんでした")
+            if self.debug:
+                screenshot_path = self.download_dir / "debug_no_download_button.png"
+                page.screenshot(path=str(screenshot_path))
+                print(f"エラースクリーンショット保存: {screenshot_path}")
+            return None
+
+        # ダウンロードハンドラを設定してボタンをクリック
+        download_path = None
+
+        with page.expect_download(timeout=30000) as download_info:
+            print("ダウンロードボタンをクリック中...")
+            download_button.click()
+
+        # ダウンロードオブジェクトを取得
+        download: Download = download_info.value
+
+        # ファイルを保存
+        filename = download.suggested_filename
+        download_path = self.download_dir / filename
+        download.save_as(download_path)
+
+        print(f"ファイルのダウンロードに成功: {download_path}")
+        return str(download_path)
+
     def export_data(
         self, page: Page, start_date: date | None = None, end_date: date | None = None
     ) -> str | None:
         """TaskChute Cloudからデータをエクスポートします。
 
         この関数はエクスポートページに移動し、日付範囲を入力し、CSVをダウンロードします。
+        既存ファイルが存在する場合はスキップし、欠けている日付のみをエクスポートします。
 
         Args:
             page: Playwright Pageオブジェクト (ログイン済みである必要があります)
@@ -134,81 +288,69 @@ class TaskChuteExporter:
         try:
             # 指定されていない場合はデフォルト日付を計算
             from datetime import date as date_class
-            from datetime import timedelta
 
             if start_date is None:
                 start_date = date_class.today() - timedelta(days=1)
             if end_date is None:
                 end_date = date_class.today() - timedelta(days=1)
 
-            # エクスポートページへ移動
-            export_url = "https://taskchute.cloud/export/csv-export"
-            print(f"{export_url} へ移動中")
-            page.goto(export_url, timeout=30000)
+            # 既存ファイルをチェック
+            existing_dates, missing_dates = self._check_existing_files(start_date, end_date)
 
-            # ページが安定した状態になるまで待機
-            print("ページの読み込みを待機中...")
-            page.wait_for_load_state("load", timeout=30000)
+            # 全ての日付のファイルが存在する場合
+            if not missing_dates:
+                if existing_dates:
+                    first_existing_file = self._get_expected_filename(existing_dates[0])
+                    print(
+                        f"全ての日付のファイルが既に存在します ({start_date} 〜 {end_date})。"
+                        f"スキップします: {first_existing_file}"
+                    )
+                    return str(first_existing_file)
+                else:
+                    # 日付範囲が空の場合（通常は発生しない）
+                    print("日付範囲が空です")
+                    return None
 
-            # 日付入力フィールドが表示されるまで待機 (Reactアプリのレンダリング完了を確認)
-            print("日付入力フィールドの表示を待機中...")
-            try:
-                page.wait_for_selector('input[placeholder*="YYYY"]', timeout=10000, state="visible")
-            except Exception:
-                # フォールバック: 個別フィールドを待機
-                page.wait_for_selector('[aria-label="年"]', timeout=10000, state="visible")
+            # 一部または全ての日付のファイルが欠けている場合
+            if existing_dates:
+                print(
+                    f"既存ファイルが見つかりました ({len(existing_dates)} 日分)。"
+                    f"欠けている日付のみをエクスポートします ({len(missing_dates)} 日分)"
+                )
 
-            # ページ読み込み後のスクリーンショットを撮影 (デバッグモードのみ)
-            if self.debug:
-                screenshot_path = self.download_dir / "debug_page_loaded.png"
-                page.screenshot(path=str(screenshot_path))
-                print(f"スクリーンショット保存: {screenshot_path}")
+            # 欠けている日付を連続する範囲にグループ化
+            missing_ranges = self._group_consecutive_dates(missing_dates)
 
-            # 日付範囲を入力
-            if not self.fill_date_range(page, start_date, end_date):
-                print("日付範囲の入力に失敗しました")
-                if self.debug:
-                    screenshot_path = self.download_dir / "debug_fill_date_failed.png"
-                    page.screenshot(path=str(screenshot_path))
-                    print(f"エラースクリーンショット保存: {screenshot_path}")
+            # 各範囲に対してエクスポート処理を実行
+            exported_files = []
+            for range_start, range_end in missing_ranges:
+                if range_start == range_end:
+                    print(f"エクスポート中: {range_start}")
+                else:
+                    print(f"エクスポート中: {range_start} 〜 {range_end}")
+
+                exported_file = self._export_date_range(page, range_start, range_end)
+                if exported_file:
+                    exported_files.append(exported_file)
+                else:
+                    print(f"エクスポート失敗: {range_start} 〜 {range_end}")
+                    # エラー時のスクリーンショットを撮影 (デバッグモードのみ)
+                    if self.debug:
+                        try:
+                            screenshot_path = self.download_dir / "debug_error.png"
+                            page.screenshot(path=str(screenshot_path))
+                            print(f"エラースクリーンショット保存: {screenshot_path}")
+                        except Exception as screenshot_error:
+                            print(f"エラースクリーンショットの撮影に失敗: {screenshot_error}")
+                    # 一部のエクスポートが失敗した場合でも、成功したファイルがあれば返す
+                    if not exported_files:
+                        return None
+
+            # 最初にエクスポートしたファイルのパスを返す
+            if exported_files:
+                return exported_files[0]
+            else:
                 return None
-
-            # 日付入力後のスクリーンショットを撮影 (デバッグモードのみ)
-            if self.debug:
-                screenshot_path = self.download_dir / "debug_dates_filled.png"
-                page.screenshot(path=str(screenshot_path))
-                print(f"スクリーンショット保存: {screenshot_path}")
-
-            # ダウンロードボタンを検索
-            download_button = page.locator('button:has-text("ダウンロード")')
-            button_count = download_button.count()
-            print(f"ダウンロードボタンを {button_count} 個発見")
-
-            if button_count == 0:
-                print("ダウンロードボタンが見つかりませんでした")
-                if self.debug:
-                    screenshot_path = self.download_dir / "debug_no_download_button.png"
-                    page.screenshot(path=str(screenshot_path))
-                    print(f"エラースクリーンショット保存: {screenshot_path}")
-                return None
-
-            # ダウンロードハンドラを設定してボタンをクリック
-            download_path = None
-
-            with page.expect_download(timeout=30000) as download_info:
-                print("ダウンロードボタンをクリック中...")
-                download_button.click()
-
-            # ダウンロードオブジェクトを取得
-            download: Download = download_info.value
-
-            # ファイルを保存
-            filename = download.suggested_filename
-            download_path = self.download_dir / filename
-            download.save_as(download_path)
-
-            print(f"ファイルのダウンロードに成功: {download_path}")
-            return str(download_path)
 
         except Exception as e:
             print(f"エクスポートがエラーで失敗しました: {e}")
