@@ -1,0 +1,33 @@
+---
+description: Pythonのユニットテストとuvの使用に関するルール
+globs: '**/*.py'
+alwaysApply: true
+---
+
+# Pythonのユニットテストとuvの使用
+
+## Python環境とパッケージ管理
+
+- **パッケージマネージャ**: このプロジェクトは**uv**を使用します。`python`や`pip`コマンドは使用しません。
+- **コマンド実行**: すべてのPythonコマンドは`uv run`をプレフィックスとして使用します。
+  - 例: `uv run pytest`, `uv run python -m tccretro.cli`, `uv run ruff check`
+- **依存関係のインストール**: `uv sync`を使用して依存関係をインストールします。
+
+## ユニットテスト
+
+- **テストフレームワーク**: pytestを使用します。
+- **テスト実行**: テストは必ず`uv run pytest`で実行します。
+  - 例: `uv run pytest tests/test_export.py -v`
+  - 例: `uv run pytest tests/ --cov=src/tccretro --cov-report=term`
+- **テスト作成**: 新しい機能を実装する際は、必ず対応するユニットテストを作成します。
+- **テストカバレッジ**: 主要ロジックは必ずテストでカバーし、カバレッジ目標は85%以上です。
+- **テスト構成**: 
+  - 共通フィクスチャは`app/tests/conftest.py`に定義
+  - 各モジュールに対応するテストファイルを作成（例: `test_export.py`）
+  - テストケースには日本語のdocstringを記述
+
+## コード実行時の注意
+
+- Pythonスクリプトを実行する際は、必ず`uv run`を使用します。
+- ターミナルコマンドでPythonを実行する場合は、`python`ではなく`uv run python`を使用します。
+- 環境変数の設定やパッケージのインストールも`uv`コマンドを使用します。
