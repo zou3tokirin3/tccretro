@@ -145,101 +145,123 @@ def main(
         click.echo("エラー: --login-only と --export-only は同時に指定できません", err=True)
         sys.exit(1)
 
-    try:
-        # Initialize components
-        login_handler = create_login_from_env()
+    # エクスポート処理の場合、既存ファイルを事前チェック
+    exported_file = None
+    if not login_only:
+        exporter = TaskChuteExporter(download_dir=str(output_path), debug=debug)
+        existing_dates, missing_dates = exporter.check_existing_files(start_date, end_date)
 
-        # Run Playwright automation with persistent Chrome profile
-        with sync_playwright() as p:
-            # Create persistent profile directory
-            profile_dir = Path("./chrome-profile")
-            profile_dir.mkdir(parents=True, exist_ok=True)
-
-            # Launch Chrome with persistent context
-            click.echo("\n[0/2] Chrome を起動中...")
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir),
-                headless=not debug,
-                slow_mo=slow_mo,
-                channel="chrome",  # Use system Chrome
-                viewport={"width": 1920, "height": 1080},
-                accept_downloads=True,
-                locale="ja-JP",
-                timezone_id="Asia/Tokyo",
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                ],
+        # 全てのファイルが存在する場合、ログイン処理もスキップ
+        if not missing_dates and existing_dates:
+            first_existing_file = exporter.get_expected_filename(existing_dates[0])
+            click.echo(
+                f"\n全ての日付のファイルが既に存在します ({start_date} 〜 {end_date})。"
+                f"スキップします: {first_existing_file}"
             )
-            page = context.new_page()
+            exported_file = str(first_existing_file)
+        else:
+            # 一部または全てのファイルが欠けている場合は、通常の処理を続行
+            exported_file = None
 
-            try:
-                # Determine total steps
-                total_steps = 2
-                if analyze and not login_only:
-                    total_steps = 3
+    try:
+        # 既存ファイルが全て揃っている場合は、ログイン処理をスキップ
+        if exported_file is None:
+            # Initialize components
+            login_handler = create_login_from_env()
 
-                # Step 1: Login
-                if not export_only:
-                    click.echo(f"\n[1/{total_steps}] TaskChute Cloudにログイン中...")
+            # Run Playwright automation with persistent Chrome profile
+            with sync_playwright() as p:
+                # Create persistent profile directory
+                profile_dir = Path("./chrome-profile")
+                profile_dir.mkdir(parents=True, exist_ok=True)
 
-                    if login_only:
-                        # --login-only の場合は、未ログインでも待機する
-                        if not debug:
-                            click.echo(
-                                "[警告] --login-only を headless モードで実行中。",
-                                err=True,
-                            )
-                            click.echo(
-                                "手動ログイン操作はできません。--debug オプションを付けて再実行することを推奨します。",
-                                err=True,
-                            )
+                # Launch Chrome with persistent context
+                click.echo("\n[0/2] Chrome を起動中...")
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=str(profile_dir),
+                    headless=not debug,
+                    slow_mo=slow_mo,
+                    channel="chrome",  # Use system Chrome
+                    viewport={"width": 1920, "height": 1080},
+                    accept_downloads=True,
+                    locale="ja-JP",
+                    timezone_id="Asia/Tokyo",
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                    ],
+                )
+                page = context.new_page()
 
-                        login_success = login_handler.login(
-                            page, wait_for_manual_login=True, manual_timeout_sec=login_timeout
-                        )
+                try:
+                    # Determine total steps
+                    total_steps = 2
+                    if analyze and not login_only:
+                        total_steps = 3
 
-                        if login_success:
-                            click.echo("✓ ログイン成功")
-                            click.echo("(認証情報は chrome-profile/ に自動保存されます)")
-                            click.echo("\n=== ログインテスト完了 ===")
-                            sys.exit(0)
-                        else:
-                            click.echo("\n⚠ ログインが検出されませんでした", err=True)
+                    # Step 1: Login
+                    if not export_only:
+                        click.echo(f"\n[1/{total_steps}] TaskChute Cloudにログイン中...")
+
+                        if login_only:
+                            # --login-only の場合は、未ログインでも待機する
                             if not debug:
                                 click.echo(
-                                    "--debug オプションを付けて再実行することを推奨します。",
+                                    "[警告] --login-only を headless モードで実行中。",
                                     err=True,
                                 )
+                                click.echo(
+                                    "手動ログイン操作はできません。--debug オプションを付けて再実行することを推奨します。",
+                                    err=True,
+                                )
+
+                            login_success = login_handler.login(
+                                page, wait_for_manual_login=True, manual_timeout_sec=login_timeout
+                            )
+
+                            if login_success:
+                                click.echo("✓ ログイン成功")
+                                click.echo("(認証情報は chrome-profile/ に自動保存されます)")
+                                click.echo("\n=== ログインテスト完了 ===")
+                                sys.exit(0)
+                            else:
+                                click.echo("\n⚠ ログインが検出されませんでした", err=True)
+                                if not debug:
+                                    click.echo(
+                                        "--debug オプションを付けて再実行することを推奨します。",
+                                        err=True,
+                                    )
+                                sys.exit(1)
+                        else:
+                            # 通常の実行時は、ログイン失敗で終了
+                            login_success = login_handler.login(page)
+
+                            if not login_success:
+                                click.echo("✗ ログイン失敗", err=True)
+                                sys.exit(1)
+
+                            click.echo("✓ ログイン成功")
+                            click.echo("(認証情報は chrome-profile/ に自動保存されます)")
+
+                    # Step 2: Export
+                    if not login_only:
+                        click.echo(f"\n[2/{total_steps}] データをエクスポート中...")
+                        exporter = TaskChuteExporter(download_dir=str(output_path), debug=debug)
+                        exported_file = exporter.export_data(
+                            page, start_date=start_date, end_date=end_date
+                        )
+
+                        if not exported_file:
+                            click.echo("✗ エクスポート失敗", err=True)
                             sys.exit(1)
-                    else:
-                        # 通常の実行時は、ログイン失敗で終了
-                        login_success = login_handler.login(page)
 
-                        if not login_success:
-                            click.echo("✗ ログイン失敗", err=True)
-                            sys.exit(1)
+                        click.echo(f"✓ エクスポート成功: {exported_file}")
 
-                        click.echo("✓ ログイン成功")
-                        click.echo("(認証情報は chrome-profile/ に自動保存されます)")
-
-                # Step 2: Export
-                exported_file = None
-                if not login_only:
-                    click.echo(f"\n[2/{total_steps}] データをエクスポート中...")
-                    exporter = TaskChuteExporter(download_dir=str(output_path), debug=debug)
-                    exported_file = exporter.export_data(
-                        page, start_date=start_date, end_date=end_date
-                    )
-
-                    if not exported_file:
-                        click.echo("✗ エクスポート失敗", err=True)
-                        sys.exit(1)
-
-                    click.echo(f"✓ エクスポート成功: {exported_file}")
-
-            finally:
-                page.close()
-                context.close()
+                finally:
+                    page.close()
+                    context.close()
+        else:
+            # 既存ファイルが全て揃っている場合
+            click.echo(f"✓ エクスポート成功: {exported_file}")
 
         # Step 3: Analyze (if requested)
         # Note: Analysis is performed after browser is closed to prevent

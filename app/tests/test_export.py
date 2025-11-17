@@ -281,11 +281,11 @@ class TestTaskChuteExporter:
         assert mock_page.wait_for_selector.call_count == 4
 
     def test_get_expected_filename(self, temp_download_dir: Path):
-        """_get_expected_filename: 期待されるファイル名が正しく生成される."""
+        """get_expected_filename: 期待されるファイル名が正しく生成される."""
         exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
         target_date = date(2025, 11, 15)
 
-        result = exporter._get_expected_filename(target_date)
+        result = exporter.get_expected_filename(target_date)
 
         assert result == temp_download_dir / "tasks_20251115-20251115.csv"
 
@@ -300,7 +300,7 @@ class TestTaskChuteExporter:
         (temp_download_dir / "tasks_20251111-20251111.csv").touch()
         (temp_download_dir / "tasks_20251112-20251112.csv").touch()
 
-        existing_dates, missing_dates = exporter._check_existing_files(start_date, end_date)
+        existing_dates, missing_dates = exporter.check_existing_files(start_date, end_date)
 
         assert len(existing_dates) == 3
         assert len(missing_dates) == 0
@@ -317,7 +317,7 @@ class TestTaskChuteExporter:
         # 2025-11-11は欠けている
         (temp_download_dir / "tasks_20251112-20251112.csv").touch()
 
-        existing_dates, missing_dates = exporter._check_existing_files(start_date, end_date)
+        existing_dates, missing_dates = exporter.check_existing_files(start_date, end_date)
 
         assert len(existing_dates) == 2
         assert len(missing_dates) == 1
@@ -330,11 +330,61 @@ class TestTaskChuteExporter:
         start_date = date(2025, 11, 10)
         end_date = date(2025, 11, 12)
 
-        existing_dates, missing_dates = exporter._check_existing_files(start_date, end_date)
+        existing_dates, missing_dates = exporter.check_existing_files(start_date, end_date)
 
         assert len(existing_dates) == 0
         assert len(missing_dates) == 3
         assert missing_dates == [date(2025, 11, 10), date(2025, 11, 11), date(2025, 11, 12)]
+
+    def test_check_existing_files_with_range_file(self, temp_download_dir: Path):
+        """check_existing_files: 範囲ファイルが存在する場合."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        start_date = date(2025, 11, 11)
+        end_date = date(2025, 11, 13)
+
+        # 範囲ファイルを作成（3日分を1つのファイルに）
+        (temp_download_dir / "tasks_20251111-20251113.csv").touch()
+
+        existing_dates, missing_dates = exporter.check_existing_files(start_date, end_date)
+
+        assert len(existing_dates) == 3
+        assert len(missing_dates) == 0
+        assert existing_dates == [date(2025, 11, 11), date(2025, 11, 12), date(2025, 11, 13)]
+
+    def test_check_existing_files_partial_range_coverage(self, temp_download_dir: Path):
+        """check_existing_files: 範囲ファイルが一部の日付をカバーしている場合."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+        start_date = date(2025, 11, 10)
+        end_date = date(2025, 11, 13)
+
+        # 範囲ファイルを作成（11-12日のみ）
+        (temp_download_dir / "tasks_20251111-20251112.csv").touch()
+
+        existing_dates, missing_dates = exporter.check_existing_files(start_date, end_date)
+
+        assert len(existing_dates) == 2
+        assert len(missing_dates) == 2
+        assert existing_dates == [date(2025, 11, 11), date(2025, 11, 12)]
+        assert missing_dates == [date(2025, 11, 10), date(2025, 11, 13)]
+
+    def test_parse_filename_date_range(self, temp_download_dir: Path):
+        """_parse_filename_date_range: ファイル名から日付範囲を正しく抽出."""
+        exporter = TaskChuteExporter(download_dir=str(temp_download_dir))
+
+        # 単一日付
+        start, end = exporter._parse_filename_date_range("tasks_20251110-20251110.csv")
+        assert start == date(2025, 11, 10)
+        assert end == date(2025, 11, 10)
+
+        # 範囲日付
+        start, end = exporter._parse_filename_date_range("tasks_20251111-20251113.csv")
+        assert start == date(2025, 11, 11)
+        assert end == date(2025, 11, 13)
+
+        # 無効なファイル名
+        start, end = exporter._parse_filename_date_range("invalid.csv")
+        assert start is None
+        assert end is None
 
     def test_group_consecutive_dates_single_range(self, temp_download_dir: Path):
         """_group_consecutive_dates: 連続する日付が1つの範囲にグループ化される."""

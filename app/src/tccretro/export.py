@@ -116,7 +116,7 @@ class TaskChuteExporter:
             traceback.print_exc()
             return False
 
-    def _get_expected_filename(self, target_date: date) -> Path:
+    def get_expected_filename(self, target_date: date) -> Path:
         """指定された日付に対応する期待されるファイル名を生成します。
 
         Args:
@@ -129,10 +129,54 @@ class TaskChuteExporter:
         filename = f"tasks_{date_str}-{date_str}.csv"
         return self.download_dir / filename
 
-    def _check_existing_files(
+    def _get_expected_filename(self, target_date: date) -> Path:
+        """指定された日付に対応する期待されるファイル名を生成します（内部用エイリアス）。
+
+        Args:
+            target_date: 対象日付
+
+        Returns:
+            期待されるファイルパス
+        """
+        return self.get_expected_filename(target_date)
+
+    def _parse_filename_date_range(self, filename: str) -> tuple[date | None, date | None]:
+        """ファイル名から日付範囲を抽出します。
+
+        Args:
+            filename: ファイル名（例: tasks_20251111-20251113.csv）
+
+        Returns:
+            (開始日, 終了日)のタプル。パースに失敗した場合は(None, None)
+        """
+        import re
+
+        match = re.search(r"tasks_(\d{8})-(\d{8})\.csv", filename)
+        if match:
+            try:
+                start_date_str = match.group(1)
+                end_date_str = match.group(2)
+                start_date = date(
+                    int(start_date_str[:4]),
+                    int(start_date_str[4:6]),
+                    int(start_date_str[6:]),
+                )
+                end_date = date(
+                    int(end_date_str[:4]), int(end_date_str[4:6]), int(end_date_str[6:])
+                )
+                return start_date, end_date
+            except (ValueError, IndexError):
+                return None, None
+        return None, None
+
+    def check_existing_files(
         self, start_date: date, end_date: date
     ) -> tuple[list[date], list[date]]:
         """日付範囲内の既存ファイルをチェックします。
+
+        既存のCSVファイルをスキャンし、指定された日付範囲が既存ファイルで
+        カバーされているかをチェックします。範囲ファイル（例: tasks_20251111-20251113.csv）
+        も考慮します。
 
         Args:
             start_date: 開始日
@@ -141,19 +185,47 @@ class TaskChuteExporter:
         Returns:
             (存在する日付のリスト, 欠けている日付のリスト)のタプル
         """
+        # ダウンロードディレクトリ内の全てのtasks_*.csvファイルをスキャン
+        existing_ranges: list[tuple[date, date]] = []
+        for file_path in self.download_dir.glob("tasks_*.csv"):
+            file_start, file_end = self._parse_filename_date_range(file_path.name)
+            if file_start is not None and file_end is not None:
+                existing_ranges.append((file_start, file_end))
+
+        # 各日付が既存ファイルの範囲でカバーされているかチェック
         existing_dates = []
         missing_dates = []
 
         current_date = start_date
         while current_date <= end_date:
-            expected_file = self._get_expected_filename(current_date)
-            if expected_file.exists():
-                existing_dates.append(current_date)
-            else:
+            # この日付が既存ファイルのいずれかの範囲に含まれているかチェック
+            is_covered = False
+            for range_start, range_end in existing_ranges:
+                if range_start <= current_date <= range_end:
+                    existing_dates.append(current_date)
+                    is_covered = True
+                    break
+
+            if not is_covered:
                 missing_dates.append(current_date)
+
             current_date += timedelta(days=1)
 
         return existing_dates, missing_dates
+
+    def _check_existing_files(
+        self, start_date: date, end_date: date
+    ) -> tuple[list[date], list[date]]:
+        """日付範囲内の既存ファイルをチェックします（内部用エイリアス）。
+
+        Args:
+            start_date: 開始日
+            end_date: 終了日
+
+        Returns:
+            (存在する日付のリスト, 欠けている日付のリスト)のタプル
+        """
+        return self.check_existing_files(start_date, end_date)
 
     def _group_consecutive_dates(self, dates: list[date]) -> list[tuple[date, date]]:
         """日付リストを連続する範囲にグループ化します。
@@ -295,7 +367,7 @@ class TaskChuteExporter:
                 end_date = date_class.today() - timedelta(days=1)
 
             # 既存ファイルをチェック
-            existing_dates, missing_dates = self._check_existing_files(start_date, end_date)
+            existing_dates, missing_dates = self.check_existing_files(start_date, end_date)
 
             # 全ての日付のファイルが存在する場合
             if not missing_dates:
