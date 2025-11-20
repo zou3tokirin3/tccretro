@@ -82,3 +82,6 @@ dmypy.json
 
 # kamui
 .kamui/
+
+# Prompt template (actual usage file, template is in .tmpl)
+app/config/prompt_template.md

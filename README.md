@@ -146,6 +146,54 @@ aws_secret_access_key = your_secret_key
 
 AI分析を無効化する場合は `--no-ai` フラグを使用してください。
 
+**重要**: AWS BedrockのServerless foundation modelsは、初回呼び出し時に自動的に有効化されます。ただし、Anthropicモデル（Claude）の場合、一部の初回ユーザーは利用ケース詳細フォームの提出が必要な場合があります。
+
+エラーが発生した場合は、エラーメッセージに従って対応してください。詳細は「トラブルシューティング」セクションを参照してください。
+
+#### プロンプトテンプレートのカスタマイズ
+
+AI分析で使用するプロンプトは、`app/config/prompt_template.md` ファイルでカスタマイズできます。このファイルが見つからない場合は、標準のプロンプトが使用されます。
+
+**初回セットアップ:**
+
+```bash
+# テンプレートファイルをコピーして使用ファイルを作成
+cp app/config/prompt_template.md.tmpl app/config/prompt_template.md
+```
+
+その後、`app/config/prompt_template.md` を編集してプロンプトをカスタマイズできます。このファイルはGit管理外のため、個人の設定として自由に編集できます。
+
+プロンプトテンプレート内では、以下のプレースホルダーを使用できます:
+
+- **`{date_info_section}`**: 分析対象の日付情報
+  - 単一日付の場合: `# 分析対象日\n2025-01-15\n2025-01-15 (水曜日): 平日`
+  - 日付範囲の場合: `# 分析対象期間\n2025-01-01 〜 2025-01-31\n2025-01-01 (水曜日): 平日\n...`
+  - 各日付の曜日と祝日情報（日本の祝日判定を含む）が含まれます
+
+- **`{project_definitions_section}`**: プロジェクト定義の説明
+  - `app/project_definitions.yaml` から読み込まれたプロジェクトの説明が含まれます
+  - 形式: `# プロジェクト定義\n\n以下は各プロジェクトの定義です：\n\n## プロジェクト名\n説明文\n`
+  - プロジェクト定義ファイルが存在しない場合は空文字列になります
+
+- **`{project_data}`**: プロジェクト別分析データ（JSON形式）
+  - 各プロジェクトの時間集計データが含まれます
+  - 例: `{"total_projects": 5, "total_hours": 40.5, "top_project": "プロジェクトA", "top_project_hours": 15.2, "projects": {"プロジェクトA": 15.2, "プロジェクトB": 10.3, ...}}`
+
+- **`{mode_data}`**: モード別分析データ（JSON形式）
+  - 各モードの時間集計データが含まれます
+  - 例: `{"total_modes": 3, "total_hours": 40.5, "top_mode": "集中", "top_mode_hours": 20.1, "modes": {"集中": 20.1, "移動": 10.2, ...}}`
+
+- **`{routine_data}`**: ルーチン別分析データ（JSON形式）
+  - ルーチンタスクと非ルーチンタスクの時間集計データが含まれます
+  - 例: `{"total_hours": 40.5, "routine_hours": 15.2, "non_routine_hours": 25.3, "routine_percentage": 37.5, "non_routine_percentage": 62.5}`
+
+- **`{csv_sample_section}`**: CSVサンプルデータセクション
+  - 元のCSVデータから主要カラムを抽出したサンプル（最大1000行）が含まれます
+  - 形式: `# 生データサンプル（参考情報）\n\n\`\`\`csv\nタイムライン日付,タスク名,プロジェクト名,...\n2025-01-15,タスク1,プロジェクトA,...\n...\n\`\`\`\n`
+  - CSVデータが提供されていない場合は空文字列になります
+
+これらのプレースホルダーは、テンプレートファイル内で `{変数名}` の形式で記述すると、実行時に実際のデータに置き換えられます。
+
 ### CLIオプション一覧
 
 ```bash
@@ -272,6 +320,34 @@ tccretro/
 ```
 
 ## トラブルシューティング
+
+### AI分析エラー: ResourceNotFoundException (use case details)
+
+**症状**: `Model use case details have not been submitted for this account` というエラーが表示される
+
+**原因**: AWS BedrockのServerless foundation modelsは初回呼び出し時に自動的に有効化されますが、Anthropicモデル（Claude）の場合、一部の初回ユーザーは利用ケース詳細フォームの提出が必要な場合があります。
+
+**対処法**:
+
+1. [AWS Bedrock コンソール](https://console.aws.amazon.com/bedrock/)にログイン
+2. [Model catalog](https://console.aws.amazon.com/bedrock/home?region=us-east-1#/model-catalog)から使用したいAnthropicモデル（例: Claude Sonnet）を選択
+3. モデル詳細ページで利用ケース詳細フォームを提出（エラーメッセージにリンクが含まれている場合があります）
+4. 承認まで15分程度待機（承認後、再度実行してください）
+
+**自社Webサイトがない場合のURL入力方法**:
+
+利用ケース詳細フォームで「WebサイトURL」などの項目がある場合、以下のいずれかを入力してください：
+
+- **GitHubリポジトリのURL**: プロジェクトのGitHubリポジトリがある場合（例: `https://github.com/username/repository`）
+- **個人のGitHubプロフィール**: 個人利用の場合は、GitHubプロフィールページのURL
+- **プロジェクトのREADMEページ**: GitHubのREADMEページのURL
+- **LinkedInの企業ページ**: 企業のLinkedInページがある場合
+- **空欄のまま**: 必須項目でない場合は、空欄のままでも問題ありません
+
+**注意**: 
+- Model accessページは廃止されました。Serverless foundation modelsは初回呼び出し時に自動的に有効化されます
+- フォーム提出後すぐにエラーが解消されない場合は、15分程度待ってから再試行してください
+- エラーメッセージに具体的な手順が記載されている場合は、それに従ってください
 
 ### ログイン失敗
 

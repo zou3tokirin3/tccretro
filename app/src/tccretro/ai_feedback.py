@@ -20,16 +20,19 @@ class AIFeedbackGenerator:
         self,
         model_id: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         project_definitions_path: str | None = None,
+        prompt_template_path: str | None = None,
     ):
         """AIFeedbackGeneratorを初期化する.
 
         Args:
             model_id: 使用するBedrockのモデルIDまたは推論プロファイルID
             project_definitions_path: プロジェクト定義YAMLファイルのパス（省略時はデフォルトパス）
+            prompt_template_path: プロンプトテンプレートファイルのパス（省略時はデフォルトパス）
         """
         self.model_id = model_id
         self.bedrock_client = self._create_bedrock_client()
         self.project_definitions = self._load_project_definitions(project_definitions_path)
+        self.prompt_template_path = prompt_template_path
 
     def _create_bedrock_client(self) -> Any:
         """Bedrock Runtimeクライアントを作成する.
@@ -118,6 +121,83 @@ class AIFeedbackGenerator:
                 lines.append("")
 
         return "\n".join(lines)
+
+    def _load_prompt_template(self) -> str | None:
+        """プロンプトテンプレートファイルを読み込む.
+
+        Returns:
+            str | None: テンプレートファイルの内容。ファイルが見つからない場合はNone
+        """
+        if self.prompt_template_path is None:
+            # デフォルトパス: このファイルの親ディレクトリの親の親/config/prompt_template.md
+            current_file = Path(__file__)
+            template_path = current_file.parent.parent.parent / "config" / "prompt_template.md"
+        else:
+            template_path = Path(self.prompt_template_path)
+
+        if not template_path.exists():
+            logger.warning(
+                "プロンプトテンプレートファイルが見つかりません: %s。標準プロンプトを使用します。",
+                template_path,
+            )
+            return None
+
+        try:
+            with template_path.open("r", encoding="utf-8") as f:
+                template = f.read()
+                logger.info("プロンプトテンプレートを読み込みました: %s", template_path)
+                return template
+        except Exception as e:
+            logger.error("プロンプトテンプレートの読み込みに失敗しました: %s", e)
+            return None
+
+    def _get_default_prompt_template(self) -> str:
+        """標準プロンプトテンプレートを返す.
+
+        Returns:
+            str: 標準プロンプトテンプレート
+        """
+        return """あなたは時間管理とライフスタイル改善のエキスパートです。
+以下のTaskChute Cloudのデータ分析結果をもとに、より良い暮らしのための時間の使い方についての詳細なフィードバックを提供してください。
+{date_info_section}
+{project_definitions_section}
+
+# プロジェクト別分析データ
+```json
+{project_data}
+```
+
+# モード別分析データ
+```json
+{mode_data}
+```
+
+# ルーチン別分析データ
+```json
+{routine_data}
+```
+{csv_sample_section}
+以下の観点から分析とフィードバックを提供してください：
+
+## 1. 現状分析
+- 時間の使い方の傾向と特徴
+- バランスの良い点と課題点
+- 特に注目すべきプロジェクトやモード
+- ルーチンタスクと非ルーチンタスクの割合とその意味
+
+## 2. 改善提案
+- より良い時間配分のための具体的な提案
+- ワークライフバランスの改善案
+- 優先順位付けのアドバイス
+- ルーチン化できるタスクやルーチンの見直しについて
+
+## 3. アクションプラン
+- 今週から実践できる具体的な行動
+- 短期目標（1週間）と中期目標（1ヶ月）
+- 進捗を測定する指標
+
+回答はMarkdown形式で、見出しを使って構造化してください。
+具体的で実践的なアドバイスを心がけてください。"""
 
     def _extract_relevant_csv_data(self, data: Any, max_rows: int = 1000) -> str:
         """CSVデータから必要なカラムのみを抽出してサンプルを作成する.
@@ -287,7 +367,19 @@ class AIFeedbackGenerator:
             return feedback
 
         except Exception as e:
-            logger.error("AI分析に失敗しました: %s", e)
+            error_message = str(e)
+            logger.error("AI分析に失敗しました: %s", error_message)
+
+            # ResourceNotFoundExceptionの場合、より詳細なメッセージを追加
+            if "ResourceNotFoundException" in error_message:
+                if "use case details" in error_message.lower():
+                    logger.warning(
+                        "Anthropicモデルの利用には、AWSアカウントで利用ケース詳細フォームの提出が必要な場合があります。"
+                        "AWS BedrockコンソールのModel catalogから該当モデルを選択し、"
+                        "利用ケース詳細フォームを提出してください。"
+                        "詳細: https://console.aws.amazon.com/bedrock/home#/model-catalog"
+                    )
+
             return self._generate_fallback_feedback(project_summary, mode_summary, routine_summary)
 
     def _build_prompt(
@@ -337,47 +429,18 @@ class AIFeedbackGenerator:
                     f"\n# 生データサンプル（参考情報）\n\n```csv\n{csv_sample}\n```\n"
                 )
 
-        prompt = f"""あなたは時間管理とライフスタイル改善のエキスパートです。
-以下のTaskChute Cloudのデータ分析結果をもとに、より良い暮らしのための時間の使い方についての詳細なフィードバックを提供してください。
-{date_info_section}
-{project_definitions_section}
+        # プロンプトテンプレートを読み込む（見つからない場合は標準プロンプトを使用）
+        template = self._load_prompt_template()
+        if template is None:
+            template = self._get_default_prompt_template()
 
-# プロジェクト別分析データ
-```json
-{project_data}
-```
-
-# モード別分析データ
-```json
-{mode_data}
-```
-
-# ルーチン別分析データ
-```json
-{routine_data}
-```
-{csv_sample_section}
-以下の観点から分析とフィードバックを提供してください：
-
-## 1. 現状分析
-- 時間の使い方の傾向と特徴
-- バランスの良い点と課題点
-- 特に注目すべきプロジェクトやモード
-- ルーチンタスクと非ルーチンタスクの割合とその意味
-
-## 2. 改善提案
-- より良い時間配分のための具体的な提案
-- ワークライフバランスの改善案
-- 優先順位付けのアドバイス
-- ルーチン化できるタスクやルーチンの見直しについて
-
-## 3. アクションプラン
-- 今週から実践できる具体的な行動
-- 短期目標（1週間）と中期目標（1ヶ月）
-- 進捗を測定する指標
-
-回答はMarkdown形式で、見出しを使って構造化してください。
-具体的で実践的なアドバイスを心がけてください。"""
+        # プレースホルダーを置換
+        prompt = template.replace("{date_info_section}", date_info_section)
+        prompt = prompt.replace("{project_definitions_section}", project_definitions_section)
+        prompt = prompt.replace("{project_data}", project_data)
+        prompt = prompt.replace("{mode_data}", mode_data)
+        prompt = prompt.replace("{routine_data}", routine_data)
+        prompt = prompt.replace("{csv_sample_section}", csv_sample_section)
 
         return prompt
 

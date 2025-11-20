@@ -152,6 +152,106 @@ class TestAIFeedbackGenerator:
         assert "分析対象日" not in prompt
         assert "生データサンプル" not in prompt
 
+    def test_プロンプトテンプレートファイルが存在する場合_読み込まれる(self, sample_dataframe):
+        """テンプレートファイルが存在する場合、そのファイルから読み込まれることを確認."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            template_path = Path(tmpdir) / "custom_template.md"
+            template_content = """カスタムプロンプトテンプレート
+{date_info_section}
+{project_definitions_section}
+{project_data}
+{mode_data}
+{routine_data}
+{csv_sample_section}
+"""
+            template_path.write_text(template_content, encoding="utf-8")
+
+            generator = AIFeedbackGenerator(prompt_template_path=str(template_path))
+            prompt = generator._build_prompt(
+                project_summary={"total_projects": 2},
+                mode_summary={"total_modes": 2},
+                routine_summary={"total_hours": 2.25},
+                data=sample_dataframe,
+                start_date="2025-11-03",
+                end_date="2025-11-03",
+            )
+
+            assert "カスタムプロンプトテンプレート" in prompt
+            assert "{date_info_section}" not in prompt  # プレースホルダーが置換されている
+            assert "{project_data}" not in prompt
+
+    def test_プロンプトテンプレートファイルが存在しない場合_標準プロンプトが使用される(
+        self, sample_dataframe
+    ):
+        """テンプレートファイルが存在しない場合、標準プロンプトが使用されることを確認."""
+        generator = AIFeedbackGenerator(
+            prompt_template_path="/nonexistent/path/template.md"
+        )
+        prompt = generator._build_prompt(
+            project_summary={"total_projects": 2},
+            mode_summary={"total_modes": 2},
+            routine_summary={"total_hours": 2.25},
+            data=sample_dataframe,
+            start_date="2025-11-03",
+            end_date="2025-11-03",
+        )
+
+        # 標準プロンプトの内容が含まれていることを確認
+        assert "時間管理とライフスタイル改善のエキスパート" in prompt
+        assert "現状分析" in prompt
+        assert "改善提案" in prompt
+        assert "アクションプラン" in prompt
+
+    def test_プロンプトテンプレートのプレースホルダーが正しく置換される(
+        self, sample_dataframe
+    ):
+        """テンプレート内のプレースホルダーが正しく置換されることを確認."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            template_path = Path(tmpdir) / "test_template.md"
+            template_content = """テストテンプレート
+日付: {date_info_section}
+プロジェクト: {project_data}
+モード: {mode_data}
+ルーチン: {routine_data}
+CSV: {csv_sample_section}
+"""
+            template_path.write_text(template_content, encoding="utf-8")
+
+            generator = AIFeedbackGenerator(prompt_template_path=str(template_path))
+            prompt = generator._build_prompt(
+                project_summary={"total_projects": 2, "projects": {"プロジェクトA": 1.5}},
+                mode_summary={"total_modes": 2, "modes": {"Focus": 1.0}},
+                routine_summary={"total_hours": 2.25, "routine_hours": 1.0},
+                data=sample_dataframe,
+                start_date="2025-11-03",
+                end_date="2025-11-03",
+            )
+
+            # プレースホルダーが置換されていることを確認
+            assert "{date_info_section}" not in prompt
+            assert "{project_data}" not in prompt
+            assert "{mode_data}" not in prompt
+            assert "{routine_data}" not in prompt
+            assert "{csv_sample_section}" not in prompt
+
+            # 実際のデータが含まれていることを確認
+            assert "2025-11-03" in prompt
+            assert '"total_projects": 2' in prompt
+            assert '"total_modes": 2' in prompt
+
+    def test_標準プロンプトテンプレートが取得できる(self):
+        """標準プロンプトテンプレートが正しく取得できることを確認."""
+        generator = AIFeedbackGenerator()
+        default_template = generator._get_default_prompt_template()
+
+        assert default_template != ""
+        assert "時間管理とライフスタイル改善のエキスパート" in default_template
+        assert "{date_info_section}" in default_template
+        assert "{project_data}" in default_template
+        assert "{mode_data}" in default_template
+        assert "{routine_data}" in default_template
+        assert "{csv_sample_section}" in default_template
+
 
 class TestReportGeneratorDateExtraction:
     """ReportGeneratorの日付抽出機能のテスト."""
